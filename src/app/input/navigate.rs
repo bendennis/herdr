@@ -176,6 +176,74 @@ impl App {
         }
     }
 
+    /// Handles keys while `Mode::NavigateAgents` has keyboard focus: browse the
+    /// agent panel with a hover cursor (mirroring `handle_navigate_key`'s
+    /// workspace browsing), then commit with Enter.
+    pub(crate) fn handle_navigate_agents_key(&mut self, raw_key: TerminalKey) {
+        let key = raw_key.as_key_event();
+        self.state.update_dismissed = true;
+
+        if key.code == KeyCode::Esc || self.state.is_prefix_key(raw_key) {
+            leave_navigate_mode(&mut self.state);
+            return;
+        }
+
+        let entry_count = crate::ui::agent_panel_entries(&self.state).len();
+        if entry_count == 0 {
+            if key.code == KeyCode::Enter {
+                leave_navigate_mode(&mut self.state);
+            }
+            return;
+        }
+        self.state.agent_panel_selected = self.state.agent_panel_selected.min(entry_count - 1);
+
+        if self
+            .state
+            .keybinds
+            .navigate
+            .workspace_up
+            .matches_direct_key(raw_key)
+        {
+            self.state.agent_panel_selected = self.state.agent_panel_selected.saturating_sub(1);
+            self.state
+                .ensure_agent_panel_entry_visible(self.state.agent_panel_selected);
+            return;
+        }
+        if self
+            .state
+            .keybinds
+            .navigate
+            .workspace_down
+            .matches_direct_key(raw_key)
+        {
+            self.state.agent_panel_selected =
+                (self.state.agent_panel_selected + 1).min(entry_count - 1);
+            self.state
+                .ensure_agent_panel_entry_visible(self.state.agent_panel_selected);
+            return;
+        }
+
+        if key.code == KeyCode::Enter {
+            if let Some((ws_idx, pane_id)) =
+                self.agent_entry_target(self.state.agent_panel_selected)
+            {
+                self.focus_pane_internal_via_api(ws_idx, pane_id);
+            }
+            leave_navigate_mode(&mut self.state);
+            return;
+        }
+
+        if key.modifiers.is_empty() {
+            if let KeyCode::Char(c @ '1'..='9') = key.code {
+                let idx = (c as usize) - ('1' as usize);
+                if let Some((ws_idx, pane_id)) = self.agent_entry_target(idx) {
+                    self.focus_pane_internal_via_api(ws_idx, pane_id);
+                    leave_navigate_mode(&mut self.state);
+                }
+            }
+        }
+    }
+
     pub(super) fn execute_tui_navigate_action(
         &mut self,
         action: NavigateAction,
@@ -264,6 +332,12 @@ impl App {
             NavigateAction::WorkspacePicker => {
                 self.state.mobile_switcher_scroll = 0;
                 self.state.mode = Mode::Navigate;
+            }
+            NavigateAction::AgentPicker => {
+                self.state.agent_panel_selected = self.current_agent_panel_entry_index();
+                self.state
+                    .ensure_agent_panel_entry_visible(self.state.agent_panel_selected);
+                self.state.mode = Mode::NavigateAgents;
             }
             NavigateAction::PreviousWorkspace => {
                 if let Some(ws_idx) = self.relative_visible_workspace(-1) {
@@ -719,6 +793,20 @@ impl App {
         let entries = crate::ui::agent_panel_entries(&self.state);
         let target = entries.get(idx)?;
         Some((target.ws_idx, target.pane_id))
+    }
+
+    /// Index of the currently focused pane within `agent_panel_entries`, or 0
+    /// if nothing is focused or the focused pane isn't an agent panel entry.
+    fn current_agent_panel_entry_index(&self) -> usize {
+        let entries = crate::ui::agent_panel_entries(&self.state);
+        let focused = self
+            .state
+            .active
+            .and_then(|idx| self.state.workspaces.get(idx))
+            .and_then(crate::workspace::Workspace::focused_pane_id);
+        focused
+            .and_then(|pane_id| entries.iter().position(|entry| entry.pane_id == pane_id))
+            .unwrap_or(0)
     }
 
     fn relative_agent_entry(&self, forward: bool) -> Option<(usize, usize, crate::layout::PaneId)> {
@@ -1287,6 +1375,7 @@ pub(crate) enum NavigateAction {
     SwitchTab(usize),
     FocusAgent(usize),
     WorkspacePicker,
+    AgentPicker,
     PreviousWorkspace,
     NextWorkspace,
     PreviousAgent,
@@ -1414,6 +1503,7 @@ fn non_indexed_action_for_key(
         (&kb.help, NavigateAction::Help),
         (&kb.settings, NavigateAction::Settings),
         (&kb.workspace_picker, NavigateAction::WorkspacePicker),
+        (&kb.agent_picker, NavigateAction::AgentPicker),
         (&kb.new_workspace, NavigateAction::NewWorkspace),
         (&kb.new_worktree, NavigateAction::NewWorktree),
         (&kb.open_worktree, NavigateAction::OpenWorktree),
@@ -1589,6 +1679,18 @@ pub(super) fn execute_navigate_action_in_context(
         NavigateAction::WorkspacePicker => {
             state.mobile_switcher_scroll = 0;
             state.mode = Mode::Navigate;
+        }
+        NavigateAction::AgentPicker => {
+            let entries = crate::ui::agent_panel_entries(state);
+            let focused = state
+                .active
+                .and_then(|idx| state.workspaces.get(idx))
+                .and_then(crate::workspace::Workspace::focused_pane_id);
+            state.agent_panel_selected = focused
+                .and_then(|pane_id| entries.iter().position(|entry| entry.pane_id == pane_id))
+                .unwrap_or(0);
+            state.ensure_agent_panel_entry_visible(state.agent_panel_selected);
+            state.mode = Mode::NavigateAgents;
         }
         NavigateAction::PreviousWorkspace => {
             state.previous_workspace();
@@ -2372,6 +2474,124 @@ navigate_pane_right = "ctrl+l"
         );
 
         assert_eq!(action, Some(NavigateAction::NextAgent));
+    }
+
+    fn app_with_agent_panes(count: usize) -> (App, Vec<crate::layout::PaneId>) {
+        let mut app = app_with_test_workspaces(&["test"]);
+        let mut pane_ids = vec![app.state.workspaces[0].tabs[0].root_pane];
+        for _ in 1..count {
+            pane_ids.push(app.state.workspaces[0].test_split(Direction::Horizontal));
+        }
+        app.state.ensure_test_terminals();
+        for (idx, pane_id) in pane_ids.iter().enumerate() {
+            let terminal_id = app.state.workspaces[0]
+                .terminal_id(*pane_id)
+                .cloned()
+                .unwrap();
+            app.state
+                .terminals
+                .get_mut(&terminal_id)
+                .unwrap()
+                .set_detected_state(
+                    Some(crate::detect::Agent::Claude),
+                    if idx == 0 {
+                        crate::detect::AgentState::Working
+                    } else {
+                        crate::detect::AgentState::Idle
+                    },
+                );
+        }
+        (app, pane_ids)
+    }
+
+    #[tokio::test]
+    async fn default_agent_picker_key_enters_navigate_agents_mode() {
+        let (mut app, _) = app_with_agent_panes(1);
+
+        app.handle_prefix_key(TerminalKey::new(KeyCode::Char('a'), KeyModifiers::empty()));
+
+        assert_eq!(app.state.mode, Mode::NavigateAgents);
+    }
+
+    #[tokio::test]
+    async fn agent_picker_selects_currently_focused_pane() {
+        let (mut app, pane_ids) = app_with_agent_panes(2);
+        app.state.workspaces[0].tabs[0]
+            .layout
+            .focus_pane(pane_ids[1]);
+
+        app.handle_prefix_key(TerminalKey::new(KeyCode::Char('a'), KeyModifiers::empty()));
+
+        let entries = crate::ui::agent_panel_entries(&app.state);
+        assert_eq!(entries[app.state.agent_panel_selected].pane_id, pane_ids[1]);
+    }
+
+    #[tokio::test]
+    async fn navigate_agents_up_down_moves_selection_and_clamps() {
+        let (mut app, _) = app_with_agent_panes(3);
+        app.state.mode = Mode::NavigateAgents;
+        app.state.agent_panel_selected = 0;
+
+        app.handle_navigate_agents_key(TerminalKey::new(KeyCode::Up, KeyModifiers::empty()));
+        assert_eq!(app.state.agent_panel_selected, 0);
+
+        app.handle_navigate_agents_key(TerminalKey::new(KeyCode::Down, KeyModifiers::empty()));
+        app.handle_navigate_agents_key(TerminalKey::new(KeyCode::Down, KeyModifiers::empty()));
+        app.handle_navigate_agents_key(TerminalKey::new(KeyCode::Down, KeyModifiers::empty()));
+        assert_eq!(app.state.agent_panel_selected, 2);
+
+        app.handle_navigate_agents_key(TerminalKey::new(KeyCode::Up, KeyModifiers::empty()));
+        assert_eq!(app.state.agent_panel_selected, 1);
+    }
+
+    #[tokio::test]
+    async fn navigate_agents_enter_focuses_selected_pane_and_leaves_mode() {
+        let (mut app, pane_ids) = app_with_agent_panes(2);
+        app.state.mode = Mode::NavigateAgents;
+        app.state.agent_panel_selected = 1;
+
+        app.handle_navigate_agents_key(TerminalKey::new(KeyCode::Enter, KeyModifiers::empty()));
+
+        assert_eq!(app.state.mode, Mode::Terminal);
+        assert_eq!(app.state.workspaces[0].focused_pane_id(), Some(pane_ids[1]));
+    }
+
+    #[tokio::test]
+    async fn navigate_agents_digit_key_jumps_directly_to_agent_by_index() {
+        let (mut app, pane_ids) = app_with_agent_panes(3);
+        app.state.mode = Mode::NavigateAgents;
+        app.state.agent_panel_selected = 0;
+
+        app.handle_navigate_agents_key(TerminalKey::new(KeyCode::Char('3'), KeyModifiers::empty()));
+
+        assert_eq!(app.state.mode, Mode::Terminal);
+        assert_eq!(app.state.workspaces[0].focused_pane_id(), Some(pane_ids[2]));
+    }
+
+    #[tokio::test]
+    async fn navigate_agents_digit_key_out_of_range_is_noop() {
+        let (mut app, _) = app_with_agent_panes(2);
+        let focused_before = app.state.workspaces[0].focused_pane_id();
+        app.state.mode = Mode::NavigateAgents;
+        app.state.agent_panel_selected = 0;
+
+        app.handle_navigate_agents_key(TerminalKey::new(KeyCode::Char('9'), KeyModifiers::empty()));
+
+        assert_eq!(app.state.mode, Mode::NavigateAgents);
+        assert_eq!(app.state.workspaces[0].focused_pane_id(), focused_before);
+    }
+
+    #[tokio::test]
+    async fn navigate_agents_esc_leaves_mode_without_changing_focus() {
+        let (mut app, _) = app_with_agent_panes(2);
+        let focused_before = app.state.workspaces[0].focused_pane_id();
+        app.state.mode = Mode::NavigateAgents;
+        app.state.agent_panel_selected = 1;
+
+        app.handle_navigate_agents_key(TerminalKey::new(KeyCode::Esc, KeyModifiers::empty()));
+
+        assert_eq!(app.state.mode, Mode::Terminal);
+        assert_eq!(app.state.workspaces[0].focused_pane_id(), focused_before);
     }
 
     #[test]

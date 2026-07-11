@@ -717,22 +717,39 @@ pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: 
         detail_area.height.saturating_sub(1),
     );
     if detail_content_area != Rect::default() {
+        let is_navigating_agents = app.mode == Mode::NavigateAgents;
         for (detail_idx, detail) in agent_panel_entries(app).iter().enumerate() {
             let y = detail_content_area.y + detail_idx as u16;
             if y >= detail_content_area.y + detail_content_area.height {
                 break;
             }
-            let pane_num = app
-                .workspaces
-                .get(detail.ws_idx)
-                .and_then(|ws| ws.public_pane_number(detail.pane_id))
-                .unwrap_or(detail_idx + 1);
-            let pane_style = Style::default().fg(p.overlay0);
+            let is_active = app.is_active_pane(detail.ws_idx, detail.tab_idx, detail.pane_id);
+            let is_selected = is_navigating_agents && detail_idx == app.agent_panel_selected;
+            let row_style = if is_selected {
+                Style::default().bg(p.surface0)
+            } else if is_active {
+                Style::default().bg(p.surface_dim)
+            } else {
+                Style::default()
+            };
+            let num_style = if is_selected {
+                Style::default().fg(p.overlay1).bg(p.surface0)
+            } else if is_active {
+                Style::default().fg(p.text).bg(p.surface_dim)
+            } else {
+                Style::default().fg(p.overlay0)
+            };
+            if is_selected || is_active {
+                let buf = frame.buffer_mut();
+                for x in detail_content_area.x..detail_content_area.x + detail_content_area.width {
+                    buf[(x, y)].set_style(row_style);
+                }
+            }
             let (icon, icon_style) = agent_icon(detail.state, detail.seen, app.spinner_tick, p);
             frame.render_widget(
                 Paragraph::new(Line::from(vec![
-                    Span::styled(format!("{pane_num}"), pane_style),
-                    Span::styled(" ", pane_style),
+                    Span::styled(format!("{}", detail_idx + 1), num_style),
+                    Span::styled(" ", row_style),
                     Span::styled(icon, icon_style),
                 ])),
                 Rect::new(detail_content_area.x, y, detail_content_area.width, 1),
@@ -1052,15 +1069,17 @@ fn render_agent_detail(
         return;
     }
 
+    let is_navigating_agents = app.mode == Mode::NavigateAgents;
     let mut row_y = body.y;
     let body_bottom = body.y + body.height;
-    for detail in details.iter().skip(app.agent_panel_scroll) {
+    for (idx, detail) in details.iter().enumerate().skip(app.agent_panel_scroll) {
         if row_y.saturating_add(1) >= body_bottom {
             break;
         }
 
         // Check if this agent entry corresponds to the active session
         let is_active = app.is_active_pane(detail.ws_idx, detail.tab_idx, detail.pane_id);
+        let is_selected = is_navigating_agents && idx == app.agent_panel_selected;
 
         let (icon, icon_style) = agent_icon(detail.state, detail.seen, app.spinner_tick, p);
         let label_color = state_label_color(detail.state, detail.seen, p);
@@ -1070,18 +1089,20 @@ fn render_agent_detail(
             .map(String::as_str)
             .unwrap_or_else(|| state_label(detail.state, detail.seen));
 
-        let row_style = if is_active {
+        let row_style = if is_selected {
+            Style::default().bg(p.surface0)
+        } else if is_active {
             Style::default().bg(p.surface_dim)
         } else {
             Style::default()
         };
 
-        let name_style = if is_active {
+        let name_style = if is_selected || is_active {
             Style::default().fg(p.text).add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(p.subtext0).add_modifier(Modifier::BOLD)
         };
-        let status_style = if is_active {
+        let status_style = if is_selected || is_active {
             Style::default().fg(label_color)
         } else {
             Style::default().fg(label_color).add_modifier(Modifier::DIM)
@@ -1325,6 +1346,77 @@ mod tests {
         assert_eq!(
             buffer[(detail_area.x + 2, first_detail_y)].style().fg,
             Some(app.palette.red)
+        );
+    }
+
+    #[test]
+    fn collapsed_agent_detail_shows_sequential_index_not_pane_number() {
+        // Each workspace's single pane is that workspace's own pane #1, so the
+        // per-workspace pane number would render "1" for every row. The
+        // collapsed rail's numbers must instead reflect list position.
+        let mut app = crate::app::state::AppState::test_new();
+        app.workspaces = vec![Workspace::test_new("one"), Workspace::test_new("two")];
+        app.ensure_test_terminals();
+        app.active = Some(0);
+        app.selected = 0;
+        for ws_idx in 0..2 {
+            let pane = app.workspaces[ws_idx].tabs[0].root_pane;
+            let terminal_id = app.workspaces[ws_idx].tabs[0].panes[&pane]
+                .attached_terminal_id
+                .clone();
+            app.terminals.get_mut(&terminal_id).unwrap().detected_agent = Some(Agent::Claude);
+        }
+
+        let area = Rect::new(0, 0, 5, 12);
+        let (_, _, detail_area) = collapsed_sidebar_sections(area);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height))
+            .expect("test terminal should initialize");
+
+        terminal
+            .draw(|frame| render_sidebar_collapsed(&app, frame, area))
+            .expect("collapsed sidebar should render");
+
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(detail_area.x, detail_area.y)].symbol(), "1");
+        assert_eq!(buffer[(detail_area.x, detail_area.y + 1)].symbol(), "2");
+    }
+
+    #[test]
+    fn collapsed_agent_detail_highlights_navigate_agents_selection() {
+        let mut app = crate::app::state::AppState::test_new();
+        app.workspaces = vec![Workspace::test_new("one"), Workspace::test_new("two")];
+        app.ensure_test_terminals();
+        app.active = Some(0);
+        app.selected = 0;
+        for ws_idx in 0..2 {
+            let pane = app.workspaces[ws_idx].tabs[0].root_pane;
+            let terminal_id = app.workspaces[ws_idx].tabs[0].panes[&pane]
+                .attached_terminal_id
+                .clone();
+            app.terminals.get_mut(&terminal_id).unwrap().detected_agent = Some(Agent::Claude);
+        }
+        app.mode = Mode::NavigateAgents;
+        app.agent_panel_selected = 1;
+
+        let area = Rect::new(0, 0, 5, 12);
+        let (_, _, detail_area) = collapsed_sidebar_sections(area);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height))
+            .expect("test terminal should initialize");
+
+        terminal
+            .draw(|frame| render_sidebar_collapsed(&app, frame, area))
+            .expect("collapsed sidebar should render");
+
+        let buffer = terminal.backend().buffer();
+        assert_ne!(
+            buffer[(detail_area.x, detail_area.y)].style().bg,
+            Some(app.palette.surface0),
+            "unselected row should not be highlighted"
+        );
+        assert_eq!(
+            buffer[(detail_area.x, detail_area.y + 1)].style().bg,
+            Some(app.palette.surface0),
+            "selected row should be highlighted"
         );
     }
 
