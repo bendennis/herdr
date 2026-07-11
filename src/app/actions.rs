@@ -1179,6 +1179,45 @@ impl AppState {
         }
     }
 
+    pub(crate) fn focused_agent_entry_index(&self) -> Option<usize> {
+        let focused = self
+            .active
+            .and_then(|idx| self.workspaces.get(idx))
+            .and_then(crate::workspace::Workspace::focused_pane_id)?;
+        crate::ui::agent_panel_entries(self)
+            .iter()
+            .position(|entry| entry.pane_id == focused)
+    }
+
+    pub(crate) fn sync_selected_agent_with_focus(&mut self) {
+        self.selected_agent = self.focused_agent_entry_index().unwrap_or(0);
+    }
+
+    pub(crate) fn move_selected_agent_by_delta(&mut self, delta: isize) {
+        let entries = crate::ui::agent_panel_entries(self);
+        if entries.is_empty() {
+            return;
+        }
+        let current_pos = self.selected_agent.min(entries.len().saturating_sub(1));
+        let target_pos = (current_pos as isize + delta)
+            .clamp(0, entries.len().saturating_sub(1) as isize) as usize;
+        self.selected_agent = target_pos;
+        self.ensure_agent_panel_entry_visible(target_pos);
+    }
+
+    pub(crate) fn enter_workspace_navigate_mode(&mut self) {
+        self.mobile_switcher_scroll = 0;
+        self.navigate_sidebar_target = crate::app::state::NavigateSidebarTarget::Workspace;
+        self.mode = crate::app::state::Mode::Navigate;
+    }
+
+    pub(crate) fn enter_agent_navigate_mode(&mut self) {
+        self.sync_selected_agent_with_focus();
+        self.navigate_sidebar_target = crate::app::state::NavigateSidebarTarget::Agent;
+        self.mode = crate::app::state::Mode::Navigate;
+        self.ensure_agent_panel_entry_visible(self.selected_agent);
+    }
+
     #[cfg(test)]
     pub fn next_workspace(&mut self) {
         if self.workspaces.is_empty() {

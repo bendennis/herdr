@@ -508,6 +508,8 @@ impl App {
             active,
             previous_pane_focus: None,
             selected,
+            selected_agent: 0,
+            navigate_sidebar_target: state::NavigateSidebarTarget::Workspace,
             mode,
             should_quit: false,
             detach_exits: no_session,

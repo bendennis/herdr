@@ -136,7 +136,14 @@ impl App {
             .workspace_up
             .matches_direct_key(raw_key)
         {
-            self.state.move_selected_workspace_by_visible_delta(-1);
+            match self.state.navigate_sidebar_target {
+                crate::app::state::NavigateSidebarTarget::Workspace => {
+                    self.state.move_selected_workspace_by_visible_delta(-1);
+                }
+                crate::app::state::NavigateSidebarTarget::Agent => {
+                    self.state.move_selected_agent_by_delta(-1);
+                }
+            }
             return;
         }
         if self
@@ -146,7 +153,14 @@ impl App {
             .workspace_down
             .matches_direct_key(raw_key)
         {
-            self.state.move_selected_workspace_by_visible_delta(1);
+            match self.state.navigate_sidebar_target {
+                crate::app::state::NavigateSidebarTarget::Workspace => {
+                    self.state.move_selected_workspace_by_visible_delta(1);
+                }
+                crate::app::state::NavigateSidebarTarget::Agent => {
+                    self.state.move_selected_agent_by_delta(1);
+                }
+            }
             return;
         }
 
@@ -262,8 +276,10 @@ impl App {
                 }
             }
             NavigateAction::WorkspacePicker => {
-                self.state.mobile_switcher_scroll = 0;
-                self.state.mode = Mode::Navigate;
+                self.state.enter_workspace_navigate_mode();
+            }
+            NavigateAction::AgentPicker => {
+                self.state.enter_agent_navigate_mode();
             }
             NavigateAction::PreviousWorkspace => {
                 if let Some(ws_idx) = self.relative_visible_workspace(-1) {
@@ -1123,17 +1139,35 @@ pub(super) fn handle_navigate_reserved_key(state: &mut AppState, key: TerminalKe
     if modifiers.is_empty() {
         match code {
             KeyCode::Enter => {
-                if !state.workspaces.is_empty() {
-                    state.switch_workspace(state.selected);
-                    leave_navigate_mode(state);
+                match state.navigate_sidebar_target {
+                    crate::app::state::NavigateSidebarTarget::Workspace => {
+                        if !state.workspaces.is_empty() {
+                            state.switch_workspace(state.selected);
+                            leave_navigate_mode(state);
+                        }
+                    }
+                    crate::app::state::NavigateSidebarTarget::Agent => {
+                        if state.focus_agent_entry(state.selected_agent) {
+                            leave_navigate_mode(state);
+                        }
+                    }
                 }
                 return true;
             }
             KeyCode::Char(c @ '1'..='9') => {
                 let idx = (c as usize) - ('1' as usize);
-                if let Some(ws_idx) = state.workspace_at_visible_position(idx) {
-                    state.switch_workspace(ws_idx);
-                    leave_navigate_mode(state);
+                match state.navigate_sidebar_target {
+                    crate::app::state::NavigateSidebarTarget::Workspace => {
+                        if let Some(ws_idx) = state.workspace_at_visible_position(idx) {
+                            state.switch_workspace(ws_idx);
+                            leave_navigate_mode(state);
+                        }
+                    }
+                    crate::app::state::NavigateSidebarTarget::Agent => {
+                        if state.focus_agent_entry(idx) {
+                            leave_navigate_mode(state);
+                        }
+                    }
                 }
                 return true;
             }
@@ -1158,7 +1192,14 @@ pub(super) fn handle_navigate_reserved_key(state: &mut AppState, key: TerminalKe
     }
 
     if state.keybinds.navigate.workspace_up.matches_direct_key(key) {
-        state.move_selected_workspace_by_visible_delta(-1);
+        match state.navigate_sidebar_target {
+            crate::app::state::NavigateSidebarTarget::Workspace => {
+                state.move_selected_workspace_by_visible_delta(-1);
+            }
+            crate::app::state::NavigateSidebarTarget::Agent => {
+                state.move_selected_agent_by_delta(-1);
+            }
+        }
         return true;
     }
     if state
@@ -1167,7 +1208,14 @@ pub(super) fn handle_navigate_reserved_key(state: &mut AppState, key: TerminalKe
         .workspace_down
         .matches_direct_key(key)
     {
-        state.move_selected_workspace_by_visible_delta(1);
+        match state.navigate_sidebar_target {
+            crate::app::state::NavigateSidebarTarget::Workspace => {
+                state.move_selected_workspace_by_visible_delta(1);
+            }
+            crate::app::state::NavigateSidebarTarget::Agent => {
+                state.move_selected_agent_by_delta(1);
+            }
+        }
         return true;
     }
     if state.keybinds.navigate.pane_left.matches_direct_key(key) {
@@ -1195,18 +1243,32 @@ fn navigate_reserved_action_for_key(state: &AppState, key: TerminalKey) -> Optio
     if modifiers.is_empty() {
         match code {
             KeyCode::Enter => {
-                return (!state.workspaces.is_empty()).then_some(NavigateAction::SwitchWorkspace(
-                    state
-                        .visible_workspace_order()
-                        .iter()
-                        .position(|idx| *idx == state.selected)
-                        .unwrap_or(state.selected),
-                ));
+                return match state.navigate_sidebar_target {
+                    crate::app::state::NavigateSidebarTarget::Workspace => {
+                        (!state.workspaces.is_empty()).then_some(NavigateAction::SwitchWorkspace(
+                            state
+                                .visible_workspace_order()
+                                .iter()
+                                .position(|idx| *idx == state.selected)
+                                .unwrap_or(state.selected),
+                        ))
+                    }
+                    crate::app::state::NavigateSidebarTarget::Agent => {
+                        (!crate::ui::agent_panel_entries(state).is_empty())
+                            .then_some(NavigateAction::FocusAgent(state.selected_agent))
+                    }
+                };
             }
             KeyCode::Char(c @ '1'..='9') => {
-                return Some(NavigateAction::SwitchWorkspace(
-                    (c as usize) - ('1' as usize),
-                ));
+                let idx = (c as usize) - ('1' as usize);
+                return match state.navigate_sidebar_target {
+                    crate::app::state::NavigateSidebarTarget::Workspace => {
+                        Some(NavigateAction::SwitchWorkspace(idx))
+                    }
+                    crate::app::state::NavigateSidebarTarget::Agent => {
+                        Some(NavigateAction::FocusAgent(idx))
+                    }
+                };
             }
             KeyCode::Tab => return Some(NavigateAction::CyclePaneNext),
             KeyCode::BackTab => return Some(NavigateAction::CyclePanePrevious),
@@ -1287,6 +1349,7 @@ pub(crate) enum NavigateAction {
     SwitchTab(usize),
     FocusAgent(usize),
     WorkspacePicker,
+    AgentPicker,
     PreviousWorkspace,
     NextWorkspace,
     PreviousAgent,
@@ -1414,6 +1477,7 @@ fn non_indexed_action_for_key(
         (&kb.help, NavigateAction::Help),
         (&kb.settings, NavigateAction::Settings),
         (&kb.workspace_picker, NavigateAction::WorkspacePicker),
+        (&kb.agent_picker, NavigateAction::AgentPicker),
         (&kb.new_workspace, NavigateAction::NewWorkspace),
         (&kb.new_worktree, NavigateAction::NewWorktree),
         (&kb.open_worktree, NavigateAction::OpenWorktree),
@@ -1587,8 +1651,10 @@ pub(super) fn execute_navigate_action_in_context(
             }
         }
         NavigateAction::WorkspacePicker => {
-            state.mobile_switcher_scroll = 0;
-            state.mode = Mode::Navigate;
+            state.enter_workspace_navigate_mode();
+        }
+        NavigateAction::AgentPicker => {
+            state.enter_agent_navigate_mode();
         }
         NavigateAction::PreviousWorkspace => {
             state.previous_workspace();
@@ -1852,6 +1918,34 @@ mod tests {
         });
     }
 
+    fn state_with_agents() -> AppState {
+        let mut first = Workspace::test_new("one");
+        let first_root = first.tabs[0].root_pane;
+        let first_second = first.test_split(Direction::Horizontal);
+        first.tabs[0].layout.focus_pane(first_root);
+        let second = Workspace::test_new("two");
+        let second_root = second.tabs[0].root_pane;
+
+        let mut state = state_with_workspaces(&["one", "two"]);
+        state.workspaces = vec![first, second];
+        state.ensure_test_terminals();
+        state.active = Some(0);
+        state.selected = 0;
+        for (ws_idx, tab_idx, pane_id) in [
+            (0, 0, first_root),
+            (0, 0, first_second),
+            (1, 0, second_root),
+        ] {
+            let terminal_id = state.workspaces[ws_idx].tabs[tab_idx].panes[&pane_id]
+                .attached_terminal_id
+                .clone();
+            let terminal = state.terminals.get_mut(&terminal_id).unwrap();
+            terminal.detected_agent = Some(crate::detect::Agent::Claude);
+            terminal.state = crate::detect::AgentState::Idle;
+        }
+        state
+    }
+
     fn app_with_test_workspaces(names: &[&str]) -> App {
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
@@ -2079,6 +2173,69 @@ mod tests {
 
         assert_eq!(state.active, Some(2));
         assert_eq!(state.selected, 2);
+    }
+
+    #[test]
+    fn agent_picker_enters_agent_navigate_mode() {
+        let mut state = state_with_agents();
+        state.mode = Mode::Prefix;
+
+        execute_navigate_action_in_context(
+            &mut state,
+            &mut TerminalRuntimeRegistry::new(),
+            NavigateAction::AgentPicker,
+            ActionContext::Prefix,
+        );
+
+        assert_eq!(state.mode, Mode::Navigate);
+        assert_eq!(
+            state.navigate_sidebar_target,
+            crate::app::state::NavigateSidebarTarget::Agent
+        );
+        assert_eq!(state.selected_agent, 0);
+    }
+
+    #[test]
+    fn navigate_down_moves_selected_agent_in_agent_mode() {
+        let mut state = state_with_agents();
+        state.enter_agent_navigate_mode();
+
+        handle_navigate_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Down, KeyModifiers::empty()),
+        );
+
+        assert_eq!(state.selected_agent, 1);
+        assert_eq!(state.mode, Mode::Navigate);
+    }
+
+    #[test]
+    fn navigate_number_keys_focus_agent_by_panel_index() {
+        let mut state = state_with_agents();
+        state.enter_agent_navigate_mode();
+
+        handle_navigate_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('3'), KeyModifiers::empty()),
+        );
+
+        assert_eq!(state.active, Some(1));
+        assert_eq!(state.mode, Mode::Terminal);
+    }
+
+    #[test]
+    fn navigate_enter_focuses_selected_agent() {
+        let mut state = state_with_agents();
+        state.enter_agent_navigate_mode();
+        state.selected_agent = 2;
+
+        handle_navigate_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()),
+        );
+
+        assert_eq!(state.active, Some(1));
+        assert_eq!(state.mode, Mode::Terminal);
     }
 
     #[test]

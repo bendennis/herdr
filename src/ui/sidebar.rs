@@ -9,7 +9,7 @@ use ratatui::{
 use super::scrollbar::{render_scrollbar, should_show_scrollbar};
 use super::status::{agent_icon, state_dot, state_label, state_label_color};
 use super::text::{display_width, display_width_u16, truncate_end};
-use crate::app::state::{AgentPanelSort, Palette};
+use crate::app::state::{AgentPanelSort, NavigateSidebarTarget, Palette};
 use crate::app::{AppState, Mode};
 use crate::detect::AgentState;
 use crate::terminal::TerminalRuntimeRegistry;
@@ -641,6 +641,10 @@ pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: 
     }
 
     let is_navigating = matches!(app.mode, Mode::Navigate);
+    let navigating_workspaces =
+        is_navigating && app.navigate_sidebar_target == NavigateSidebarTarget::Workspace;
+    let navigating_agents =
+        is_navigating && app.navigate_sidebar_target == NavigateSidebarTarget::Agent;
 
     let p = &app.palette;
     let sep_style = if is_navigating {
@@ -668,7 +672,7 @@ pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: 
         }
         let (agg_state, agg_seen) = ws.aggregate_state(&app.terminals);
         let (icon, icon_style) = state_dot(agg_state, agg_seen, p);
-        let is_selected = visible_idx == app.selected && is_navigating;
+        let is_selected = visible_idx == app.selected && navigating_workspaces;
         let is_active = Some(visible_idx) == app.active;
         let row_style = if is_selected {
             Style::default().bg(p.surface0)
@@ -722,17 +726,35 @@ pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: 
             if y >= detail_content_area.y + detail_content_area.height {
                 break;
             }
-            let pane_num = app
-                .workspaces
-                .get(detail.ws_idx)
-                .and_then(|ws| ws.public_pane_number(detail.pane_id))
-                .unwrap_or(detail_idx + 1);
-            let pane_style = Style::default().fg(p.overlay0);
+            let is_selected = detail_idx == app.selected_agent && navigating_agents;
+            let is_active = app.is_active_pane(detail.ws_idx, detail.tab_idx, detail.pane_id);
+            let row_style = if is_selected {
+                Style::default().bg(p.surface0)
+            } else if is_active {
+                Style::default().bg(p.surface_dim)
+            } else {
+                Style::default()
+            };
+            let num_style = if is_selected {
+                Style::default().fg(p.overlay1).bg(p.surface0)
+            } else if is_active {
+                Style::default().fg(p.text).bg(p.surface_dim)
+            } else {
+                Style::default().fg(p.overlay0)
+            };
+
+            if is_selected || is_active {
+                let buf = frame.buffer_mut();
+                for x in detail_content_area.x..detail_content_area.x + detail_content_area.width {
+                    buf[(x, y)].set_style(row_style);
+                }
+            }
+
             let (icon, icon_style) = agent_icon(detail.state, detail.seen, app.spinner_tick, p);
             frame.render_widget(
                 Paragraph::new(Line::from(vec![
-                    Span::styled(format!("{pane_num}"), pane_style),
-                    Span::styled(" ", pane_style),
+                    Span::styled(format!("{}", detail_idx + 1), num_style),
+                    Span::styled(" ", row_style),
                     Span::styled(icon, icon_style),
                 ])),
                 Rect::new(detail_content_area.x, y, detail_content_area.width, 1),
@@ -797,7 +819,7 @@ pub(super) fn render_sidebar(
 
     let (ws_area, detail_area) = expanded_sidebar_sections(area, app.sidebar_section_split);
 
-    render_workspace_list(app, terminal_runtimes, frame, ws_area, is_navigating);
+    render_workspace_list(app, terminal_runtimes, frame, ws_area);
     render_agent_detail(app, terminal_runtimes, frame, detail_area);
     render_sidebar_toggle(app, frame, area, false, p);
 }
@@ -807,9 +829,11 @@ fn render_workspace_list(
     terminal_runtimes: &TerminalRuntimeRegistry,
     frame: &mut Frame,
     area: Rect,
-    is_navigating: bool,
 ) {
     let p = &app.palette;
+    let is_navigating = matches!(app.mode, Mode::Navigate);
+    let navigating_workspaces =
+        is_navigating && app.navigate_sidebar_target == NavigateSidebarTarget::Workspace;
     let dragged_ws_idx = match app.drag.as_ref().map(|drag| &drag.target) {
         Some(crate::app::state::DragTarget::WorkspaceReorder { source_ws_idx, .. }) => {
             Some(*source_ws_idx)
@@ -844,7 +868,7 @@ fn render_workspace_list(
         let ws = &app.workspaces[i];
         let row_y = card.rect.y;
         let row_height = card.rect.height;
-        let selected = i == app.selected && is_navigating;
+        let selected = i == app.selected && navigating_workspaces;
         let is_active = Some(i) == app.active;
         let is_dragged = dragged_ws_idx == Some(i);
         let highlighted = selected || is_active || is_dragged;
@@ -1052,14 +1076,18 @@ fn render_agent_detail(
         return;
     }
 
+    let is_navigating = matches!(app.mode, Mode::Navigate);
+    let navigating_agents =
+        is_navigating && app.navigate_sidebar_target == NavigateSidebarTarget::Agent;
+
     let mut row_y = body.y;
     let body_bottom = body.y + body.height;
-    for detail in details.iter().skip(app.agent_panel_scroll) {
+    for (entry_idx, detail) in details.iter().enumerate().skip(app.agent_panel_scroll) {
         if row_y.saturating_add(1) >= body_bottom {
             break;
         }
 
-        // Check if this agent entry corresponds to the active session
+        let is_selected = entry_idx == app.selected_agent && navigating_agents;
         let is_active = app.is_active_pane(detail.ws_idx, detail.tab_idx, detail.pane_id);
 
         let (icon, icon_style) = agent_icon(detail.state, detail.seen, app.spinner_tick, p);
@@ -1070,18 +1098,20 @@ fn render_agent_detail(
             .map(String::as_str)
             .unwrap_or_else(|| state_label(detail.state, detail.seen));
 
-        let row_style = if is_active {
+        let row_style = if is_selected {
+            Style::default().bg(p.surface0)
+        } else if is_active {
             Style::default().bg(p.surface_dim)
         } else {
             Style::default()
         };
 
-        let name_style = if is_active {
+        let name_style = if is_selected || is_active {
             Style::default().fg(p.text).add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(p.subtext0).add_modifier(Modifier::BOLD)
         };
-        let status_style = if is_active {
+        let status_style = if is_selected || is_active {
             Style::default().fg(label_color)
         } else {
             Style::default().fg(label_color).add_modifier(Modifier::DIM)
@@ -1494,9 +1524,7 @@ mod tests {
         let runtimes = crate::terminal::TerminalRuntimeRegistry::new();
 
         terminal
-            .draw(|frame| {
-                render_workspace_list(&app, &runtimes, frame, Rect::new(0, 0, 15, 6), false)
-            })
+            .draw(|frame| render_workspace_list(&app, &runtimes, frame, Rect::new(0, 0, 15, 6)))
             .expect("workspace list should render");
     }
 
