@@ -39,6 +39,7 @@ pub(super) fn render_prefix_overlay(app: &AppState, frame: &mut Frame, area: Rec
         .add_modifier(Modifier::BOLD);
 
     let workspace_picker = prefix_rhs_label(&app.keybinds.workspace_picker);
+    let agent_picker = prefix_rhs_label(&app.keybinds.agent_picker);
     let help = prefix_rhs_label(&app.keybinds.help);
     let prefix = crate::config::format_key_combo((app.prefix_code, app.prefix_mods));
 
@@ -51,6 +52,8 @@ pub(super) fn render_prefix_overlay(app: &AppState, frame: &mut Frame, area: Rec
         Span::styled(" send prefix  ", dim),
         Span::styled(workspace_picker, key),
         Span::styled(" workspace nav  ", dim),
+        Span::styled(agent_picker, key),
+        Span::styled(" agent nav  ", dim),
         Span::styled(help, key),
         Span::styled(" keybinds", dim),
     ]);
@@ -154,13 +157,17 @@ pub(super) fn render_navigate_overlay(app: &AppState, frame: &mut Frame, area: R
         keybind_label(&kb.navigate.workspace_up),
         keybind_label(&kb.navigate.workspace_down)
     );
+    let nav_hint = match app.navigate_sidebar_target {
+        crate::app::state::NavigateSidebarTarget::Workspace => ("ws", workspace_nav),
+        crate::app::state::NavigateSidebarTarget::Agent => ("agent", workspace_nav),
+    };
     let line = Line::from(vec![
         Span::styled(" NAVIGATE ", mode_style),
         Span::raw(" "),
         Span::styled("esc", key),
         Span::styled(" back  ", dim),
-        Span::styled(workspace_nav, key),
-        Span::styled(" ws  ", dim),
+        Span::styled(nav_hint.1, key),
+        Span::styled(format!(" {}  ", nav_hint.0), dim),
         Span::styled("⇥", key),
         Span::styled(" pane  ", dim),
         Span::styled(goto, key),

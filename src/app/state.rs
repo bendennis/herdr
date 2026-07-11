@@ -744,6 +744,14 @@ pub struct ViewState {
     pub split_borders: Vec<SplitBorder>,
 }
 
+/// Which sidebar section keyboard navigation is targeting in navigate mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NavigateSidebarTarget {
+    #[default]
+    Workspace,
+    Agent,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     Onboarding,
@@ -1324,6 +1332,8 @@ pub struct AppState {
     pub active: Option<usize>,
     pub(crate) previous_pane_focus: Option<PaneFocusTarget>,
     pub selected: usize,
+    pub selected_agent: usize,
+    pub navigate_sidebar_target: NavigateSidebarTarget,
     pub mode: Mode,
     pub should_quit: bool,
     /// In monolithic --no-session mode, detach exits the app because there is no server to detach from.
@@ -1682,6 +1692,8 @@ impl AppState {
             active: None,
             previous_pane_focus: None,
             selected: 0,
+            selected_agent: 0,
+            navigate_sidebar_target: NavigateSidebarTarget::Workspace,
             mode: Mode::Navigate,
             should_quit: false,
             detach_exits: false,

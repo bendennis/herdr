@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- Agent panel navigation now mirrors workspace navigation: `prefix+a` enters navigate mode for agents, `up` / `down` moves the selection, and `1..9` / `Enter` focus agents by sidebar index (including the collapsed sidebar rail).
 - Copy mode now supports literal smart-case search with `/` and `?`, repeating with `n` and `N`, match highlighting, and tmux-style cross-line `w`/`b`/`e` word motions. (#1230)
 
 ### Fixed

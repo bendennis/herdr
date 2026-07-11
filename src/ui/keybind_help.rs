@@ -104,13 +104,14 @@ pub(super) fn keybind_help_groups(app: &AppState) -> Vec<HelpGroup> {
                 "move focus",
             ),
             help_entry("tab / shift+tab", "cycle pane"),
-            help_entry("enter", "open workspace"),
-            help_entry("1..9", "switch workspace"),
+            help_entry("enter", "open workspace / focus agent"),
+            help_entry("1..9", "switch workspace / focus agent"),
         ],
     ));
 
     let workspace_tab = vec![
         help_entry(keybind_label(&kb.workspace_picker), "workspace navigation"),
+        help_entry(keybind_label(&kb.agent_picker), "agent navigation"),
         help_entry(keybind_label(&kb.goto), "session navigator"),
         help_entry(keybind_label(&kb.new_workspace), "new workspace"),
         help_entry(keybind_label(&kb.new_worktree), "new worktree"),
