@@ -153,18 +153,20 @@ impl App {
                             .navigator_rows_from(&self.terminal_runtimes)
                             .get(idx)
                             .map(|row| (row.target.clone(), row.is_workspace));
-                        if let Some((NavigatorTarget::Workspace { .. }, true)) = target {
-                            if self.state.navigator_row_caret_at(mouse.column) {
+                        match target {
+                            Some((NavigatorTarget::Workspace { .. }, true))
+                                if self.state.navigator_row_caret_at(mouse.column) =>
+                            {
                                 self.state.toggle_selected_navigator_workspace_from(
                                     &self.terminal_runtimes,
                                 );
-                            } else {
-                                self.state
-                                    .accept_navigator_selection_from(&self.terminal_runtimes);
                             }
-                        } else {
-                            self.state
-                                .accept_navigator_selection_from(&self.terminal_runtimes);
+                            Some((target, _)) => {
+                                if self.accept_navigator_target_via_api(target) {
+                                    self.state.mode = Mode::Terminal;
+                                }
+                            }
+                            None => {}
                         }
                     } else if !self.state.navigator_popup_contains(mouse.column, mouse.row) {
                         leave_modal(&mut self.state);

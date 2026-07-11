@@ -702,6 +702,13 @@ impl AppState {
         self.accept_navigator_selection_from(&terminal_runtimes)
     }
 
+    /// Pure targeting logic kept for characterization tests: resolves the
+    /// currently selected row and focuses it by directly mutating state.
+    /// Production key/mouse handling no longer calls this — it goes through
+    /// `App::accept_navigator_target_via_api` so focus changes are dispatched
+    /// through the runtime API layer like every other input-driven focus
+    /// change, instead of mutating `AppState` directly from input handling.
+    #[cfg(test)]
     pub(crate) fn accept_navigator_selection_from(
         &mut self,
         terminal_runtimes: &crate::terminal::TerminalRuntimeRegistry,
@@ -716,6 +723,7 @@ impl AppState {
         self.focus_navigator_target(row.target)
     }
 
+    #[cfg(test)]
     pub(crate) fn focus_navigator_target(&mut self, target: NavigatorTarget) -> bool {
         match target {
             NavigatorTarget::Workspace { ws_idx } => {

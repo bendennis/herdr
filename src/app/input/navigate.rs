@@ -453,6 +453,62 @@ impl App {
         self.runtime_tab_focus("tui.tab.focus", tab_id);
     }
 
+    pub(crate) fn focus_tab_via_api(&mut self, ws_idx: usize, tab_idx: usize) {
+        let Some(tab_id) = self.public_tab_id(ws_idx, tab_idx) else {
+            return;
+        };
+        self.runtime_tab_focus("tui.tab.focus", tab_id);
+    }
+
+    /// Focuses a navigator tree row's target via the runtime API layer, mirroring
+    /// what mouse-driven sidebar focus already does. Returns whether the target
+    /// was valid. Does not change `Mode` — callers that must leave a modal on
+    /// accept (the fuzzy Navigator overlay) do that themselves.
+    pub(crate) fn accept_navigator_target_via_api(
+        &mut self,
+        target: super::super::state::NavigatorTarget,
+    ) -> bool {
+        use super::super::state::NavigatorTarget;
+        match target {
+            NavigatorTarget::Workspace { ws_idx } => {
+                if ws_idx >= self.state.workspaces.len() {
+                    return false;
+                }
+                self.focus_workspace_idx_via_api(ws_idx);
+                true
+            }
+            NavigatorTarget::Tab { ws_idx, tab_idx } => {
+                if self
+                    .state
+                    .workspaces
+                    .get(ws_idx)
+                    .is_none_or(|ws| tab_idx >= ws.tabs.len())
+                {
+                    return false;
+                }
+                self.focus_tab_via_api(ws_idx, tab_idx);
+                true
+            }
+            NavigatorTarget::Pane {
+                ws_idx,
+                tab_idx,
+                pane_id,
+            } => {
+                if self
+                    .state
+                    .workspaces
+                    .get(ws_idx)
+                    .and_then(|ws| ws.tabs.get(tab_idx))
+                    .is_none_or(|tab| !tab.panes.contains_key(&pane_id))
+                {
+                    return false;
+                }
+                self.focus_pane_internal_via_api(ws_idx, pane_id);
+                true
+            }
+        }
+    }
+
     pub(crate) fn close_active_tab_via_api_requires_confirmation(&mut self) -> bool {
         let Some(ws_idx) = self.state.active else {
             return false;

@@ -157,18 +157,26 @@ pub(crate) fn handle_global_menu_key(state: &mut AppState, key: KeyEvent) {
     }
 }
 
+/// Handles a key press while the fuzzy Navigator overlay (or, in a future
+/// persistent-pane mode, the sidebar tree) has keyboard focus. Returns the
+/// target that should be accepted when Enter selects a row; the caller is
+/// responsible for actually focusing it (via the runtime API layer) and for
+/// deciding whether accepting should also leave the current `Mode`.
 pub(crate) fn handle_navigator_key(
     state: &mut AppState,
     terminal_runtimes: &crate::terminal::TerminalRuntimeRegistry,
     key: KeyEvent,
-) {
+) -> Option<crate::app::state::NavigatorTarget> {
     if state.navigator.search_focused {
         match key.code {
             KeyCode::Esc => {
                 state.navigator.search_focused = false;
             }
             KeyCode::Enter => {
-                state.accept_navigator_selection_from(terminal_runtimes);
+                return state
+                    .navigator_rows_from(terminal_runtimes)
+                    .get(state.navigator.selected)
+                    .map(|row| row.target.clone());
             }
             KeyCode::Backspace => {
                 state.navigator.state_filter = None;
@@ -195,7 +203,7 @@ pub(crate) fn handle_navigator_key(
             }
             _ => {}
         }
-        return;
+        return None;
     }
 
     match key.code {
@@ -203,7 +211,10 @@ pub(crate) fn handle_navigator_key(
             leave_modal(state);
         }
         KeyCode::Enter => {
-            state.accept_navigator_selection_from(terminal_runtimes);
+            return state
+                .navigator_rows_from(terminal_runtimes)
+                .get(state.navigator.selected)
+                .map(|row| row.target.clone());
         }
         KeyCode::Char('/') => {
             state.navigator.state_filter = None;
@@ -269,6 +280,7 @@ pub(crate) fn handle_navigator_key(
         }
         _ => {}
     }
+    None
 }
 
 pub(crate) fn insert_navigator_search_text(
@@ -1012,6 +1024,14 @@ impl App {
         } else {
             Mode::Navigate
         };
+    }
+
+    pub(crate) fn handle_navigator_key_via_api(&mut self, key: KeyEvent) {
+        if let Some(target) = handle_navigator_key(&mut self.state, &self.terminal_runtimes, key) {
+            if self.accept_navigator_target_via_api(target) {
+                self.state.mode = Mode::Terminal;
+            }
+        }
     }
 
     pub(crate) fn handle_resize_key_via_api(&mut self, raw_key: TerminalKey) {

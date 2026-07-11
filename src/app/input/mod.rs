@@ -46,8 +46,8 @@ mod terminal;
 
 pub(crate) use self::{
     modal::{
-        handle_global_menu_key, handle_keybind_help_key, handle_navigator_key,
-        insert_navigator_search_text, insert_rename_input_text,
+        handle_global_menu_key, handle_keybind_help_key, insert_navigator_search_text,
+        insert_rename_input_text,
     },
     navigate::{
         terminal_direct_indexed_navigation_action, terminal_direct_non_indexed_navigation_action,
@@ -102,9 +102,7 @@ impl App {
                 Mode::Settings => self.handle_settings_key(key_event),
                 Mode::GlobalMenu => handle_global_menu_key(&mut self.state, key_event),
                 Mode::KeybindHelp => handle_keybind_help_key(&mut self.state, key_event),
-                Mode::Navigator => {
-                    handle_navigator_key(&mut self.state, &self.terminal_runtimes, key_event)
-                }
+                Mode::Navigator => self.handle_navigator_key_via_api(key_event),
                 Mode::Terminal => unreachable!(),
             },
         }
@@ -756,6 +754,48 @@ mod tests {
                 .map(|create| create.branch.as_str()),
             Some("feature/linear-302")
         );
+    }
+
+    #[tokio::test]
+    async fn navigator_enter_key_routes_through_pane_focus_api() {
+        // Exercises the production App::handle_key path end to end, not just the
+        // #[cfg(test)]-only AppState-level targeting logic.
+        let mut app = test_app();
+        let first = crate::workspace::Workspace::test_new("one");
+        let second = crate::workspace::Workspace::test_new("two");
+        let target_pane = second.tabs[0].root_pane;
+        app.state.workspaces = vec![first, second];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Terminal;
+
+        app.state.open_navigator();
+        app.state
+            .navigator
+            .expanded_workspaces
+            .insert(app.state.workspaces[1].id.clone());
+        app.state.navigator.selected = app
+            .state
+            .navigator_rows()
+            .iter()
+            .position(|row| {
+                matches!(
+                    row.target,
+                    crate::app::state::NavigatorTarget::Pane { pane_id, .. }
+                        if pane_id == target_pane
+                )
+            })
+            .unwrap();
+
+        app.handle_key(TerminalKey::from(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::empty(),
+        )))
+        .await;
+
+        assert_eq!(app.state.active, Some(1));
+        assert_eq!(app.state.mode, Mode::Terminal);
     }
 
     #[test]
