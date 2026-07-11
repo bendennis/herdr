@@ -824,6 +824,9 @@ pub(crate) struct NavigatorRow {
     pub is_tab: bool,
     pub expanded: bool,
     pub search_text: String,
+    pub custom_status: Option<String>,
+    pub state_labels: std::collections::HashMap<String, String>,
+    pub last_agent_state_change_seq: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -842,6 +845,7 @@ pub(crate) struct NavigatorState {
     pub search_focused: bool,
     pub state_filter: Option<NavigatorStateFilter>,
     pub expanded_workspaces: std::collections::HashSet<String>,
+    pub sort: AgentPanelSort,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

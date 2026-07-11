@@ -77,6 +77,7 @@ pub(crate) use self::{
         workspace_list_rect, workspace_list_scroll_metrics, workspace_list_scrollbar_rect,
         workspace_parent_group_state, WorkspaceListEntry,
     },
+    status::workspace_attention_priority,
 };
 pub(crate) use self::{
     keybind_help::keybind_help_lines,

@@ -14,7 +14,7 @@ use crate::workspace::WorkspaceGitStatus;
 use unicode_width::UnicodeWidthChar;
 
 use super::state::{
-    text_matches_query, AgentNotificationDelivery, AppState, Mode, NavigatorRow,
+    text_matches_query, AgentNotificationDelivery, AgentPanelSort, AppState, Mode, NavigatorRow,
     NavigatorStateFilter, NavigatorTarget, PaneFocusTarget, PendingAgentNotification, ToastKind,
     ToastNotification, ToastTarget, ViewLayout,
 };
@@ -413,6 +413,9 @@ impl AppState {
                 is_tab: false,
                 expanded,
                 search_text: workspace_search_text,
+                custom_status: None,
+                state_labels: std::collections::HashMap::new(),
+                last_agent_state_change_seq: None,
             });
             if expanded {
                 rows.extend(child_rows);
@@ -442,7 +445,7 @@ impl AppState {
                 NavigatorQueryKind::Text => navigator_matches(query, &row.search_text),
             });
             let pane_rows = self.navigator_pane_rows_for_tab(ws_idx, tab_idx, multi_tab);
-            let filtered_panes = match query_kind {
+            let mut filtered_panes = match query_kind {
                 NavigatorQueryKind::Empty => pane_rows,
                 NavigatorQueryKind::State(filter) => pane_rows
                     .into_iter()
@@ -454,6 +457,16 @@ impl AppState {
                     .filter(|row| navigator_matches(query, &row.search_text))
                     .collect::<Vec<_>>(),
             };
+            if matches!(self.navigator.sort, AgentPanelSort::Priority) {
+                filtered_panes.sort_by_key(|row| {
+                    (
+                        std::cmp::Reverse(crate::ui::workspace_attention_priority(
+                            row.status, row.seen,
+                        )),
+                        std::cmp::Reverse(row.last_agent_state_change_seq),
+                    )
+                });
+            }
 
             if let Some(tab_row) = tab_row {
                 if tab_matches || !filtered_panes.is_empty() {
@@ -492,6 +505,9 @@ impl AppState {
             is_tab: true,
             expanded: true,
             search_text,
+            custom_status: None,
+            state_labels: std::collections::HashMap::new(),
+            last_agent_state_change_seq: None,
         }
     }
 
@@ -541,12 +557,18 @@ impl AppState {
             let state = terminal
                 .map(|terminal| terminal.state)
                 .unwrap_or(AgentState::Unknown);
-            let status_label = terminal
+            let state_labels = terminal
                 .map(|terminal| terminal.effective_presentation().state_labels)
-                .and_then(|labels| labels.get(state_label_text(state, pane.seen)).cloned());
+                .unwrap_or_default();
+            let status_label = state_labels
+                .get(state_label_text(state, pane.seen))
+                .cloned();
             let status = custom_status
+                .clone()
                 .or(status_label)
                 .or_else(|| agent_label.map(|_| state_label_text(state, pane.seen).to_string()));
+            let last_agent_state_change_seq =
+                terminal.and_then(|terminal| terminal.last_agent_state_change_seq);
             let meta = match (agent_label, status.as_deref()) {
                 (Some(agent_label), Some(status)) => format!("{agent_label} · {status}"),
                 (Some(agent_label), None) => agent_label.to_string(),
@@ -570,6 +592,9 @@ impl AppState {
                 is_tab: false,
                 expanded: false,
                 search_text,
+                custom_status,
+                state_labels,
+                last_agent_state_change_seq,
             });
         }
         rows
@@ -3429,7 +3454,10 @@ mod tests {
         let agent_pane = state.workspaces[0].test_split(Direction::Horizontal);
         state.ensure_test_terminals();
 
-        let agent_terminal_id = state.workspaces[0].terminal_id(agent_pane).cloned().unwrap();
+        let agent_terminal_id = state.workspaces[0]
+            .terminal_id(agent_pane)
+            .cloned()
+            .unwrap();
         state
             .terminals
             .get_mut(&agent_terminal_id)
@@ -3880,6 +3908,102 @@ mod tests {
 
         assert_eq!(crate::ui::agent_panel_entries(&state)[0].pane_id, second);
         state.assert_invariants_for_test();
+    }
+
+    #[test]
+    fn navigator_rows_priority_sort_orders_panes_within_tab_by_attention() {
+        let mut workspace = Workspace::test_new("one");
+        let first = workspace.tabs[0].root_pane;
+        let second = workspace.test_split(Direction::Horizontal);
+        workspace.tabs[0].layout.focus_pane(first);
+
+        let mut state = AppState::test_new();
+        state.workspaces = vec![workspace];
+        state.ensure_test_terminals();
+        state.active = Some(0);
+        state.selected = 0;
+        state.mode = Mode::Terminal;
+        state.navigator.sort = AgentPanelSort::Priority;
+
+        transition_agent_state(&mut state, first, AgentState::Idle);
+        transition_agent_state(&mut state, second, AgentState::Working);
+
+        state.open_navigator();
+        let pane_rows: Vec<_> = state
+            .navigator_rows()
+            .into_iter()
+            .filter(|row| matches!(row.target, NavigatorTarget::Pane { .. }))
+            .collect();
+        assert_eq!(pane_rows.len(), 2);
+        assert!(matches!(
+            pane_rows[0].target,
+            NavigatorTarget::Pane { pane_id, .. } if pane_id == second
+        ));
+
+        transition_agent_state(&mut state, second, AgentState::Idle);
+        let pane_rows: Vec<_> = state
+            .navigator_rows()
+            .into_iter()
+            .filter(|row| matches!(row.target, NavigatorTarget::Pane { .. }))
+            .collect();
+        assert!(matches!(
+            pane_rows[0].target,
+            NavigatorTarget::Pane { pane_id, .. } if pane_id == second
+        ));
+    }
+
+    #[test]
+    fn navigator_pane_row_carries_custom_status_and_state_labels() {
+        let mut state = app_with_workspaces(&["one"]);
+        let pane = state.workspaces[0].tabs[0].root_pane;
+        state.ensure_test_terminals();
+
+        let terminal_id = state.workspaces[0].terminal_id(pane).cloned().unwrap();
+        let terminal = state.terminals.get_mut(&terminal_id).unwrap();
+        terminal.set_hook_authority_with_custom_status(
+            "herdr:claude".into(),
+            "claude".into(),
+            AgentState::Working,
+            None,
+            Some("thinking".into()),
+            None,
+        );
+        terminal.set_agent_metadata(crate::terminal::AgentMetadataReport {
+            source: "user:presentation".into(),
+            agent_label: Some("claude".into()),
+            applies_to_source: Some("herdr:claude".into()),
+            title: None,
+            display_agent: None,
+            custom_status: Some("middleware".into()),
+            state_labels: std::collections::HashMap::from([(
+                "working".into(),
+                "deep in the mines".into(),
+            )]),
+            clear_title: false,
+            clear_display_agent: false,
+            clear_custom_status: false,
+            clear_state_labels: false,
+            ttl: None,
+            seq: None,
+        });
+
+        state.open_navigator();
+        let pane_row = state
+            .navigator_rows()
+            .into_iter()
+            .find(|row| {
+                matches!(
+                    row.target,
+                    NavigatorTarget::Pane { pane_id, .. } if pane_id == pane
+                )
+            })
+            .unwrap();
+
+        assert_eq!(pane_row.custom_status.as_deref(), Some("middleware"));
+        assert_eq!(
+            pane_row.state_labels.get("working").map(String::as_str),
+            Some("deep in the mines")
+        );
     }
 
     #[test]

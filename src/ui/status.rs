@@ -238,6 +238,16 @@ pub(super) fn state_label_color(state: AgentState, seen: bool, p: &Palette) -> C
     }
 }
 
+pub(crate) fn workspace_attention_priority(state: AgentState, seen: bool) -> u8 {
+    match (state, seen) {
+        (AgentState::Blocked, _) => 4,
+        (AgentState::Idle, false) => 3,
+        (AgentState::Working, _) => 2,
+        (AgentState::Idle, true) => 1,
+        (AgentState::Unknown, _) => 0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
