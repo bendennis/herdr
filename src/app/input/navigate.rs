@@ -230,6 +230,17 @@ impl App {
                 self.focus_pane_internal_via_api(ws_idx, pane_id);
             }
             leave_navigate_mode(&mut self.state);
+            return;
+        }
+
+        if key.modifiers.is_empty() {
+            if let KeyCode::Char(c @ '1'..='9') = key.code {
+                let idx = (c as usize) - ('1' as usize);
+                if let Some((ws_idx, pane_id)) = self.agent_entry_target(idx) {
+                    self.focus_pane_internal_via_api(ws_idx, pane_id);
+                    leave_navigate_mode(&mut self.state);
+                }
+            }
         }
     }
 
@@ -2543,6 +2554,31 @@ navigate_pane_right = "ctrl+l"
 
         assert_eq!(app.state.mode, Mode::Terminal);
         assert_eq!(app.state.workspaces[0].focused_pane_id(), Some(pane_ids[1]));
+    }
+
+    #[tokio::test]
+    async fn navigate_agents_digit_key_jumps_directly_to_agent_by_index() {
+        let (mut app, pane_ids) = app_with_agent_panes(3);
+        app.state.mode = Mode::NavigateAgents;
+        app.state.agent_panel_selected = 0;
+
+        app.handle_navigate_agents_key(TerminalKey::new(KeyCode::Char('3'), KeyModifiers::empty()));
+
+        assert_eq!(app.state.mode, Mode::Terminal);
+        assert_eq!(app.state.workspaces[0].focused_pane_id(), Some(pane_ids[2]));
+    }
+
+    #[tokio::test]
+    async fn navigate_agents_digit_key_out_of_range_is_noop() {
+        let (mut app, _) = app_with_agent_panes(2);
+        let focused_before = app.state.workspaces[0].focused_pane_id();
+        app.state.mode = Mode::NavigateAgents;
+        app.state.agent_panel_selected = 0;
+
+        app.handle_navigate_agents_key(TerminalKey::new(KeyCode::Char('9'), KeyModifiers::empty()));
+
+        assert_eq!(app.state.mode, Mode::NavigateAgents);
+        assert_eq!(app.state.workspaces[0].focused_pane_id(), focused_before);
     }
 
     #[tokio::test]
