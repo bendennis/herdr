@@ -3419,6 +3419,42 @@ mod tests {
     }
 
     #[test]
+    fn navigator_rows_cover_every_agent_panel_entry() {
+        // Characterization test: navigator_rows_from is being promoted to back the
+        // persistent sidebar, replacing agent_panel_entries. Every pane the current
+        // agent panel shows must still be reachable as a Pane row in the navigator
+        // tree before that swap happens.
+        let mut state = app_with_workspaces(&["one", "two"]);
+        state.workspaces[1].test_add_tab(Some("tests"));
+        let agent_pane = state.workspaces[0].test_split(Direction::Horizontal);
+        state.ensure_test_terminals();
+
+        let agent_terminal_id = state.workspaces[0].terminal_id(agent_pane).cloned().unwrap();
+        state
+            .terminals
+            .get_mut(&agent_terminal_id)
+            .unwrap()
+            .set_detected_state(Some(Agent::Claude), AgentState::Working);
+
+        state.open_navigator();
+        let rows = state.navigator_rows();
+        let panel_entries = crate::ui::agent_panel_entries(&state);
+
+        assert!(!panel_entries.is_empty());
+        for entry in &panel_entries {
+            assert!(
+                rows.iter().any(|row| matches!(
+                    row.target,
+                    crate::app::state::NavigatorTarget::Pane { pane_id, .. }
+                        if pane_id == entry.pane_id
+                )),
+                "agent panel entry for pane {:?} missing from navigator rows",
+                entry.pane_id
+            );
+        }
+    }
+
+    #[test]
     fn opening_navigator_selects_current_pane_and_expands_attention_workspaces() {
         let mut state = app_with_workspaces(&["one", "two"]);
         let blocked = state.workspaces[1].tabs[0].root_pane;
