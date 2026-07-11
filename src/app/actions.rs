@@ -363,7 +363,8 @@ impl AppState {
         self.navigator.selected = self
             .current_navigator_row_index_from(terminal_runtimes)
             .unwrap_or(0);
-        self.ensure_navigator_selection_visible_from(terminal_runtimes);
+        let viewport_height = self.navigator_body_rect().height as usize;
+        self.ensure_navigator_selection_visible_from(terminal_runtimes, viewport_height);
     }
 
     #[cfg(test)]
@@ -610,12 +611,16 @@ impl AppState {
             .or_else(|| rows.iter().position(|row| row.is_current))
     }
 
+    /// Clamps `navigator.scroll` so `navigator.selected` stays within a
+    /// viewport of the given height. Takes the viewport height explicitly
+    /// (rather than reading `navigator_body_rect()` itself) so this logic is
+    /// reusable by any surface rendering the row list, not just the modal.
     pub(crate) fn ensure_navigator_selection_visible_from(
         &mut self,
         terminal_runtimes: &crate::terminal::TerminalRuntimeRegistry,
+        viewport_height: usize,
     ) {
-        let body = self.navigator_body_rect();
-        let viewport = body.height as usize;
+        let viewport = viewport_height;
         if viewport == 0 {
             self.navigator.scroll = 0;
             return;
@@ -659,7 +664,8 @@ impl AppState {
         }
         let current = self.navigator.selected.min(count - 1) as isize;
         self.navigator.selected = (current + delta).clamp(0, count as isize - 1) as usize;
-        self.ensure_navigator_selection_visible_from(terminal_runtimes);
+        let viewport_height = self.navigator_body_rect().height as usize;
+        self.ensure_navigator_selection_visible_from(terminal_runtimes, viewport_height);
     }
 
     pub(crate) fn clamp_navigator_selection_from(
@@ -668,7 +674,8 @@ impl AppState {
     ) {
         let count = self.navigator_rows_from(terminal_runtimes).len();
         self.navigator.selected = self.navigator.selected.min(count.saturating_sub(1));
-        self.ensure_navigator_selection_visible_from(terminal_runtimes);
+        let viewport_height = self.navigator_body_rect().height as usize;
+        self.ensure_navigator_selection_visible_from(terminal_runtimes, viewport_height);
     }
 
     pub(crate) fn toggle_selected_navigator_workspace_from(

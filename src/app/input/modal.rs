@@ -269,14 +269,16 @@ pub(crate) fn handle_navigator_key(
         KeyCode::Char(' ') => state.toggle_selected_navigator_workspace_from(terminal_runtimes),
         KeyCode::Home => {
             state.navigator.selected = 0;
-            state.ensure_navigator_selection_visible_from(terminal_runtimes);
+            let viewport_height = state.navigator_body_rect().height as usize;
+            state.ensure_navigator_selection_visible_from(terminal_runtimes, viewport_height);
         }
         KeyCode::End | KeyCode::Char('G') => {
             state.navigator.selected = state
                 .navigator_rows_from(terminal_runtimes)
                 .len()
                 .saturating_sub(1);
-            state.ensure_navigator_selection_visible_from(terminal_runtimes);
+            let viewport_height = state.navigator_body_rect().height as usize;
+            state.ensure_navigator_selection_visible_from(terminal_runtimes, viewport_height);
         }
         _ => {}
     }

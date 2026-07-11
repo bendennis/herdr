@@ -132,8 +132,11 @@ impl App {
                         mouse.row,
                     ) {
                         self.state.navigator.selected = idx;
-                        self.state
-                            .ensure_navigator_selection_visible_from(&self.terminal_runtimes);
+                        let viewport_height = self.state.navigator_body_rect().height as usize;
+                        self.state.ensure_navigator_selection_visible_from(
+                            &self.terminal_runtimes,
+                            viewport_height,
+                        );
                     }
                 }
                 MouseEventKind::Down(MouseButton::Left) => {
