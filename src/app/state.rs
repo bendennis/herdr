@@ -750,6 +750,7 @@ pub enum Mode {
     ReleaseNotes,
     ProductAnnouncement,
     Navigate,
+    NavigateAgents,
     Prefix,
     Copy,
     Terminal,
@@ -783,6 +784,7 @@ impl Mode {
             self,
             Mode::Prefix
                 | Mode::Navigate
+                | Mode::NavigateAgents
                 | Mode::Navigator
                 | Mode::Copy
                 | Mode::Resize
@@ -1365,6 +1367,8 @@ pub struct AppState {
     pub copy_mode: Option<CopyModeState>,
     pub workspace_scroll: usize,
     pub agent_panel_scroll: usize,
+    /// Hover cursor into `agent_panel_entries`, used while `mode == Mode::NavigateAgents`.
+    pub agent_panel_selected: usize,
     pub tab_scroll: usize,
     pub tab_scroll_follow_active: bool,
     pub mobile_switcher_scroll: usize,
@@ -1716,6 +1720,7 @@ impl AppState {
             copy_mode: None,
             workspace_scroll: 0,
             agent_panel_scroll: 0,
+            agent_panel_selected: 0,
             tab_scroll: 0,
             tab_scroll_follow_active: true,
             mobile_switcher_scroll: 0,

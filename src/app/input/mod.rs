@@ -82,12 +82,15 @@ impl App {
             Mode::Terminal => self.handle_terminal_key(key).await,
             Mode::Prefix => self.handle_prefix_key(key),
             Mode::Navigate => self.handle_navigate_key(key),
+            Mode::NavigateAgents => self.handle_navigate_agents_key(key),
             Mode::Copy => self.handle_copy_mode_key(key),
             _ => match self.state.mode {
                 Mode::Onboarding => self.handle_onboarding_key(key_event),
                 Mode::ReleaseNotes => self.handle_release_notes_key(key_event),
                 Mode::ProductAnnouncement => self.handle_product_announcement_key(key_event),
-                Mode::Prefix | Mode::Navigate | Mode::Copy => unreachable!(),
+                Mode::Prefix | Mode::Navigate | Mode::NavigateAgents | Mode::Copy => {
+                    unreachable!()
+                }
                 Mode::RenameWorkspace | Mode::RenameTab | Mode::RenamePane => {
                     self.handle_rename_key_via_api(key_event)
                 }

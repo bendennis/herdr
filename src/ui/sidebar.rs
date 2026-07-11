@@ -1052,15 +1052,17 @@ fn render_agent_detail(
         return;
     }
 
+    let is_navigating_agents = app.mode == Mode::NavigateAgents;
     let mut row_y = body.y;
     let body_bottom = body.y + body.height;
-    for detail in details.iter().skip(app.agent_panel_scroll) {
+    for (idx, detail) in details.iter().enumerate().skip(app.agent_panel_scroll) {
         if row_y.saturating_add(1) >= body_bottom {
             break;
         }
 
         // Check if this agent entry corresponds to the active session
         let is_active = app.is_active_pane(detail.ws_idx, detail.tab_idx, detail.pane_id);
+        let is_selected = is_navigating_agents && idx == app.agent_panel_selected;
 
         let (icon, icon_style) = agent_icon(detail.state, detail.seen, app.spinner_tick, p);
         let label_color = state_label_color(detail.state, detail.seen, p);
@@ -1070,18 +1072,20 @@ fn render_agent_detail(
             .map(String::as_str)
             .unwrap_or_else(|| state_label(detail.state, detail.seen));
 
-        let row_style = if is_active {
+        let row_style = if is_selected {
+            Style::default().bg(p.surface0)
+        } else if is_active {
             Style::default().bg(p.surface_dim)
         } else {
             Style::default()
         };
 
-        let name_style = if is_active {
+        let name_style = if is_selected || is_active {
             Style::default().fg(p.text).add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(p.subtext0).add_modifier(Modifier::BOLD)
         };
-        let status_style = if is_active {
+        let status_style = if is_selected || is_active {
             Style::default().fg(label_color)
         } else {
             Style::default().fg(label_color).add_modifier(Modifier::DIM)
