@@ -29,6 +29,10 @@ pub(crate) struct AgentPanelEntry {
     pub last_agent_state_change_seq: Option<u64>,
     pub custom_status: Option<String>,
     pub state_labels: std::collections::HashMap<String, String>,
+    /// Rename/title context for the agent, if any. Prefers a manually reported
+    /// title (e.g. `herdr agent rename`) over the agent's own live terminal
+    /// title (OSC 0/2), since a manual rename is an explicit user choice.
+    pub context_label: Option<String>,
 }
 
 fn sidebar_section_heights(total_h: u16, split_ratio: f32) -> (u16, u16) {
@@ -125,18 +129,27 @@ fn agent_panel_entries_with_runtimes(
             let workspace_label = ws.display_name_from(&app.terminals, terminal_runtimes);
             ws.pane_details(&app.terminals)
                 .into_iter()
-                .map(move |detail| AgentPanelEntry {
-                    ws_idx,
-                    tab_idx: detail.tab_idx,
-                    pane_id: detail.pane_id,
-                    primary_label: workspace_label.clone(),
-                    primary_tab_label: multi_tab.then_some(detail.tab_label),
-                    agent_label: Some(detail.agent_label),
-                    state: detail.state,
-                    seen: detail.seen,
-                    last_agent_state_change_seq: detail.last_agent_state_change_seq,
-                    custom_status: detail.custom_status,
-                    state_labels: detail.state_labels,
+                .map(move |detail| {
+                    let live_title = ws
+                        .terminal_id(detail.pane_id)
+                        .and_then(|terminal_id| terminal_runtimes.get(terminal_id))
+                        .map(|runtime| runtime.agent_osc_title())
+                        .filter(|title| !title.is_empty());
+                    let context_label = detail.title.or(live_title);
+                    AgentPanelEntry {
+                        ws_idx,
+                        tab_idx: detail.tab_idx,
+                        pane_id: detail.pane_id,
+                        primary_label: workspace_label.clone(),
+                        primary_tab_label: multi_tab.then_some(detail.tab_label),
+                        agent_label: Some(detail.agent_label),
+                        state: detail.state,
+                        seen: detail.seen,
+                        last_agent_state_change_seq: detail.last_agent_state_change_seq,
+                        custom_status: detail.custom_status,
+                        state_labels: detail.state_labels,
+                        context_label,
+                    }
                 })
         })
         .collect();
@@ -1114,6 +1127,10 @@ fn render_agent_detail(
             status_spans.push(Span::styled(" · ", agent_style));
             status_spans.push(Span::styled(custom_status.clone(), agent_style));
         }
+        if let Some(context_label) = &detail.context_label {
+            status_spans.push(Span::styled(" · ", agent_style));
+            status_spans.push(Span::styled(context_label.clone(), agent_style));
+        }
         frame.render_widget(
             Paragraph::new(Line::from(status_spans)).style(row_style),
             Rect::new(body.x, row_y, body.width, 1),
@@ -1424,6 +1441,98 @@ mod tests {
     }
 
     #[test]
+    fn all_workspaces_agent_panel_entries_use_manual_title_as_context_label() {
+        let mut app = crate::app::state::AppState::test_new();
+        let workspace = Workspace::test_new("bridge");
+        let first_pane = workspace.tabs[0].root_pane;
+
+        app.workspaces = vec![workspace];
+        app.ensure_test_terminals();
+        let terminal_id = app.workspaces[0].tabs[0].panes[&first_pane]
+            .attached_terminal_id
+            .clone();
+        let terminal = app.terminals.get_mut(&terminal_id).unwrap();
+        terminal.detected_agent = Some(Agent::Claude);
+        terminal.set_agent_metadata(crate::terminal::AgentMetadataReport {
+            source: "test".into(),
+            agent_label: None,
+            applies_to_source: None,
+            title: Some("renamed session".into()),
+            display_agent: None,
+            custom_status: None,
+            state_labels: std::collections::HashMap::new(),
+            clear_title: false,
+            clear_display_agent: false,
+            clear_custom_status: false,
+            clear_state_labels: false,
+            ttl: None,
+            seq: None,
+        });
+        app.active = Some(0);
+        app.selected = 0;
+
+        let entries = agent_panel_entries(&app);
+        assert_eq!(entries[0].context_label.as_deref(), Some("renamed session"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn all_workspaces_agent_panel_entries_fall_back_to_live_osc_title_as_context_label() {
+        let mut app = crate::app::state::AppState::test_new();
+        let workspace = Workspace::test_new("bridge");
+        let pane = workspace.tabs[0].root_pane;
+
+        app.workspaces = vec![workspace];
+        app.ensure_test_terminals();
+        let terminal_id = app.workspaces[0].tabs[0].panes[&pane]
+            .attached_terminal_id
+            .clone();
+        app.terminals.get_mut(&terminal_id).unwrap().detected_agent = Some(Agent::Claude);
+        app.active = Some(0);
+        app.selected = 0;
+
+        let (events, _) = tokio::sync::mpsc::channel(4);
+        let runtime = crate::terminal::TerminalRuntime::spawn(
+            pane,
+            24,
+            80,
+            std::env::temp_dir(),
+            0,
+            crate::terminal_theme::TerminalTheme::default(),
+            crate::pane::PaneShellConfig::new("/bin/sh", crate::config::ShellModeConfig::NonLogin),
+            &crate::pane::PaneLaunchEnv::default(),
+            events,
+            std::sync::Arc::new(tokio::sync::Notify::new()),
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        )
+        .unwrap();
+
+        runtime
+            .try_send_bytes(bytes::Bytes::from_static(
+                b"printf '\\033]0;working on the retry loop\\007'\n",
+            ))
+            .unwrap();
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while runtime.agent_osc_title() != "working on the retry loop"
+            && std::time::Instant::now() < deadline
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        let mut runtime_registry = TerminalRuntimeRegistry::new();
+        runtime_registry.insert(terminal_id, runtime);
+        let entries = agent_panel_entries_from(&app, &runtime_registry);
+        let context_label = entries[0].context_label.clone();
+
+        for (_, runtime) in runtime_registry.drain() {
+            runtime.shutdown();
+        }
+
+        assert_eq!(context_label.as_deref(), Some("working on the retry loop"));
+    }
+
+    #[test]
     fn all_workspaces_primary_label_truncates_workspace_and_tab() {
         let entry = AgentPanelEntry {
             ws_idx: 0,
@@ -1437,6 +1546,7 @@ mod tests {
             last_agent_state_change_seq: None,
             custom_status: None,
             state_labels: std::collections::HashMap::new(),
+            context_label: None,
         };
 
         let label = format_agent_panel_primary_label(&entry, 18);
